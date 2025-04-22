@@ -26,31 +26,31 @@ class AuthController {
         email: email,
         password: password,
       );
-      // Update the user's display name
+
+      // Update the display name in Firebase Auth
       await userCredential.user?.updateDisplayName(name);
 
-      // Debug log
-      print("User registered with UID: ${userCredential.user?.uid}");
+      final uid = userCredential.user!.uid;
 
-      // Store user data in Firestore
-      await _firestore.collection('users').doc(userCredential.user?.uid).set({
+      // ✅ Save user info to Firestore
+      await _firestore.collection('users').doc(uid).set({
+        'uid': uid,
         'name': name,
         'email': email,
-        'createdAt': DateTime.now(),
+        'createdAt': FieldValue.serverTimestamp(),
       });
 
-      // Debug log
-      print("User data stored in Firestore");
-
+      print("✅ User registered and saved in Firestore.");
       return userCredential.user;
     } on FirebaseAuthException catch (e) {
-      print("Registration Error: ${e.message}");
+      print("❌ Registration Error: ${e.message}");
       return null;
     } catch (e) {
-      print("Firestore Error: $e");
+      print("❌ Firestore Error: $e");
       return null;
     }
   }
+
 
   // Sign out
   Future<void> signOut() async {

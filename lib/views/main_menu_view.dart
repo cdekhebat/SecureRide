@@ -2,11 +2,12 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:secureride/controllers/auth_controller.dart';
 import 'package:secureride/views/login_view.dart';
-import 'package:secureride/views/home_view.dart';
 import 'package:secureride/views/preview_view.dart';
 import 'package:secureride/views/camera_view.dart';
-import 'package:secureride/views/friends_view.dart';
-import 'package:secureride/views/profile_view.dart';
+import 'package:secureride/views/friends_view.dart' as friends;
+import 'package:secureride/views/profile_view.dart' as profile;
+import 'package:secureride/views/add_friend_view.dart';
+import 'package:secureride/views/home_dashboard.dart'; // Not home_view.dart
 
 class MainMenuView extends StatefulWidget {
   const MainMenuView({super.key});
@@ -18,8 +19,6 @@ class MainMenuView extends StatefulWidget {
 class _MainMenuViewState extends State<MainMenuView> {
   final AuthController _authController = AuthController();
   int _currentIndex = 0;
-  bool _isConnected = false;
-  bool _isRecording = false;
   String _currentTheme = 'Classic';
 
   final Map<String, ThemeData> _themes = {
@@ -31,9 +30,6 @@ class _MainMenuViewState extends State<MainMenuView> {
       ),
       appBarTheme: const AppBarTheme(
         color: Color(0xFF6DAEDB),
-      ),
-      floatingActionButtonTheme: const FloatingActionButtonThemeData(
-        backgroundColor: Color(0xFFF4A896),
       ),
     ),
     'Dark': ThemeData.dark(),
@@ -47,7 +43,19 @@ class _MainMenuViewState extends State<MainMenuView> {
       home: Scaffold(
         appBar: AppBar(
           title: const Text('SecureRide'),
+          centerTitle: true,
           actions: [
+            if (_currentIndex == 3)
+              IconButton(
+                icon: const Icon(Icons.person_add),
+                tooltip: 'Add Friend',
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const AddFriendView()),
+                  );
+                },
+              ),
             PopupMenuButton<String>(
               icon: const Icon(Icons.settings),
               onSelected: (value) {
@@ -55,7 +63,7 @@ class _MainMenuViewState extends State<MainMenuView> {
                   _authController.signOut();
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (context) => LoginView()),
+                    MaterialPageRoute(builder: (context) => const LoginView()),
                   );
                 } else if (value == 'theme') {
                   _showThemeDialog(context);
@@ -89,7 +97,35 @@ class _MainMenuViewState extends State<MainMenuView> {
           ],
         ),
         body: _buildCurrentScreen(),
-        bottomNavigationBar: _buildBottomNavigationBar(),
+        bottomNavigationBar: BottomNavigationBar(
+          currentIndex: _currentIndex,
+          type: BottomNavigationBarType.fixed,
+          selectedItemColor: Colors.blue,
+          unselectedItemColor: Colors.grey,
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(Icons.home),
+              label: 'Home',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.video_library),
+              label: 'Preview',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.camera_alt),
+              label: 'Camera',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.people),
+              label: 'Friends',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.person),
+              label: 'Profile',
+            ),
+          ],
+          onTap: (index) => setState(() => _currentIndex = index),
+        ),
       ),
     );
   }
@@ -97,52 +133,18 @@ class _MainMenuViewState extends State<MainMenuView> {
   Widget _buildCurrentScreen() {
     switch (_currentIndex) {
       case 0:
-        return HomeView(
-          isConnected: _isConnected,
-          isRecording: _isRecording,
-          onRecordingChanged: (value) => setState(() => _isRecording = value),
-        );
-      case 1: return const PreviewView();
-      case 2: return const CameraView();
-      case 3: return const FriendsView();
-      case 4: return const ProfileView();
+        return const HomeDashboard();
+      case 1:
+        return const PreviewView();
+      case 2:
+        return CameraView();
+      case 3:
+        return friends.FriendView();
+      case 4:
+        return profile.ProfileView();
       default:
-        return HomeView(
-          isConnected: _isConnected,
-          isRecording: _isRecording,
-          onRecordingChanged: (value) => setState(() => _isRecording = value),
-        );
+        return const HomeDashboard(); // Default case to handle all other values
     }
-  }
-
-  Widget _buildBottomNavigationBar() {
-    return BottomNavigationBar(
-      currentIndex: _currentIndex,
-      type: BottomNavigationBarType.fixed,
-      items: const [
-        BottomNavigationBarItem(
-          icon: Icon(Icons.home),
-          label: 'Home',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.video_library),
-          label: 'Preview',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.camera_alt),
-          label: 'Camera',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.people),
-          label: 'Friends',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.person),
-          label: 'Profile',
-        ),
-      ],
-      onTap: (index) => setState(() => _currentIndex = index),
-    );
   }
 
   void _showThemeDialog(BuildContext context) {
