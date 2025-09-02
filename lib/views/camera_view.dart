@@ -113,7 +113,10 @@ class _CameraViewState extends State<CameraView> {
   }
 
   Future<void> _onSavePressed() async {
+    debugPrint("🟡 Save button pressed");
+
     if (!_cameraService.isRecording) {
+      debugPrint("🔴 Not recording, can't save");
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Please start recording first")),
       );
@@ -135,27 +138,28 @@ class _CameraViewState extends State<CameraView> {
       );
 
       final savedPath = await _cameraService.saveManualRecording();
+      debugPrint("📦 Returned path from saveManualRecording: $savedPath");
 
       if (savedPath != null && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Video saved successfully!")),
         );
         _showNotification("Video Saved", "Manual recording saved to gallery");
-        debugPrint("📦 Saved to: $savedPath");
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Failed to save video")),
         );
       }
     } catch (e) {
+      debugPrint("❌ Save error: $e");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("Save failed: $e")),
         );
-        debugPrint("Save error: $e");
       }
     }
   }
+
 
   void _onPreviewPressed() {
     Navigator.push(
