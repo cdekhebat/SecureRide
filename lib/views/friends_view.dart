@@ -1,100 +1,205 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-class FriendView extends StatelessWidget {
+class FriendView extends StatefulWidget {
   const FriendView({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) return const Center(child: Text("Not signed in"));
+  State<FriendView> createState() => _FriendViewState();
+}
 
-    final userRef = FirebaseFirestore.instance.collection('users').doc(currentUser.uid);
+class _FriendViewState extends State<FriendView> {
+  final currentUser = FirebaseAuth.instance.currentUser;
+  bool _busyAccepting = false;
+  bool _busyRejecting = false;
+
+  Future<void> _acceptRequest(String senderId) async {
+    if (_busyAccepting || currentUser == null) return;
+    setState(() => _busyAccepting = true);
+
+    final users = FirebaseFirestore.instance.collection('users');
+    final meDoc = users.doc(currentUser!.uid);
+    final senderDoc = users.doc(senderId);
+
+    try {
+      final meSnap = await meDoc.get();
+      final senderSnap = await senderDoc.get();
+      final meData = (meSnap.data() as Map<String, dynamic>?) ?? {};
+      final senderData = (senderSnap.data() as Map<String, dynamic>?) ?? {};
+
+      final batch = FirebaseFirestore.instance.batch();
+
+      // Add sender to my friends
+      batch.set(
+        meDoc.collection('friends').doc(senderId),
+        {
+          'name': senderData['name'] ?? 'Unknown',
+          'photoUrl': senderData['photoUrl'] ?? '',
+        },
+      );
+
+      // Add me to sender's friends
+      batch.set(
+        senderDoc.collection('friends').doc(currentUser!.uid),
+        {
+          'name': meData['name'] ?? (currentUser!.displayName ?? 'Unnamed'),
+          'photoUrl': meData['photoUrl'] ?? (currentUser!.photoURL ?? ''),
+        },
+      );
+
+      // Remove requests
+      batch.delete(meDoc.collection('incomingRequests').doc(senderId));
+      batch.delete(senderDoc.collection('sentRequests').doc(currentUser!.uid));
+
+      await batch.commit();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('✅ Friend request accepted')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to accept: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busyAccepting = false);
+    }
+  }
+
+  Future<void> _rejectRequest(String senderId) async {
+    if (_busyRejecting || currentUser == null) return;
+    setState(() => _busyRejecting = true);
+
+    final users = FirebaseFirestore.instance.collection('users');
+    final meDoc = users.doc(currentUser!.uid);
+    final senderDoc = users.doc(senderId);
+
+    try {
+      final batch = FirebaseFirestore.instance.batch();
+      batch.delete(meDoc.collection('incomingRequests').doc(senderId));
+      batch.delete(senderDoc.collection('sentRequests').doc(currentUser!.uid));
+      await batch.commit();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Request rejected')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to reject: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busyRejecting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (currentUser == null) {
+      return const Scaffold(
+        body: Center(child: Text("Not signed in")),
+      );
+    }
+
+    final userRef =
+    FirebaseFirestore.instance.collection('users').doc(currentUser!.uid);
 
     return Scaffold(
       appBar: AppBar(title: const Text("My Friends")),
       body: ListView(
         padding: const EdgeInsets.all(8),
         children: [
-          const Text("Friend Requests", style: TextStyle(fontWeight: FontWeight.bold)),
+          // Friend Requests Section
+          const Text("Friend Requests",
+              style: TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           StreamBuilder<QuerySnapshot>(
             stream: userRef.collection('incomingRequests').snapshots(),
             builder: (context, snapshot) {
-              if (!snapshot.hasData) return const CircularProgressIndicator();
+              if (!snapshot.hasData) {
+                return const LinearProgressIndicator();
+              }
               final requests = snapshot.data!.docs;
-
               if (requests.isEmpty) {
                 return const Text("No friend requests.");
               }
 
               return Column(
-                children: requests.map((requestDoc) {
-                  final senderId = requestDoc.id;
-
+                children: requests.map((req) {
+                  final senderId = req.id;
                   return FutureBuilder<DocumentSnapshot>(
-                    future: FirebaseFirestore.instance.collection('users').doc(senderId).get(),
-                    builder: (context, snapshot) {
-                      if (!snapshot.hasData || !snapshot.data!.exists) return const SizedBox.shrink();
-
-                      final sender = snapshot.data!.data() as Map<String, dynamic>;
+                    future: FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(senderId)
+                        .get(),
+                    builder: (context, snap) {
+                      if (!snap.hasData || !snap.data!.exists) {
+                        return const SizedBox.shrink();
+                      }
+                      final sender =
+                          snap.data!.data() as Map<String, dynamic>? ?? {};
                       final senderName = sender['name'] ?? 'Unknown';
                       final senderPhoto = sender['photoUrl'];
 
-                      return ListTile(
-                        leading: CircleAvatar(
-                          backgroundImage: senderPhoto != null ? NetworkImage(senderPhoto) : null,
-                          child: senderPhoto == null ? const Icon(Icons.person) : null,
-                        ),
-                        title: Text(senderName),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.person_add, color: Colors.green),
-                              onPressed: () async {
-                                final senderDoc = FirebaseFirestore.instance.collection('users').doc(senderId);
-                                final senderSnapshot = await senderDoc.get();
-                                final senderInfo = senderSnapshot.data() as Map<String, dynamic>?;
-
-                                if (senderInfo != null) {
-                                  await userRef.collection('friends').doc(senderId).set({
-                                    'name': senderInfo['name'],
-                                    'photoUrl': senderInfo['photoUrl'],
-                                    'status': 'offline',
-                                  });
-
-                                  await senderDoc.collection('friends').doc(currentUser.uid).set({
-                                    'name': currentUser.displayName ?? 'Unnamed',
-                                    'photoUrl': currentUser.photoURL,
-                                    'status': 'offline',
-                                  });
-
-                                  await userRef.collection('incomingRequests').doc(senderId).delete();
-                                  await senderDoc.collection('sentRequests').doc(currentUser.uid).delete();
-
-                                  if (context.mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(content: Text("Friend added")),
-                                    );
-                                  }
-                                }
-                              },
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.close, color: Colors.red),
-                              onPressed: () async {
-                                await userRef.collection('incomingRequests').doc(senderId).delete();
-                                await FirebaseFirestore.instance
-                                    .collection('users')
-                                    .doc(senderId)
-                                    .collection('sentRequests')
-                                    .doc(currentUser.uid)
-                                    .delete();
-                              },
-                            ),
-                          ],
+                      return Card(
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundImage: (senderPhoto is String &&
+                                senderPhoto.isNotEmpty)
+                                ? NetworkImage(senderPhoto)
+                                : null,
+                            child: (senderPhoto == null ||
+                                (senderPhoto is String &&
+                                    senderPhoto.isEmpty))
+                                ? const Icon(Icons.person)
+                                : null,
+                          ),
+                          title: Text(senderName),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                tooltip: 'Accept',
+                                icon: _busyAccepting
+                                    ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                                    : const Icon(Icons.person_add,
+                                    color: Colors.green),
+                                onPressed: _busyAccepting
+                                    ? null
+                                    : () => _acceptRequest(senderId),
+                              ),
+                              IconButton(
+                                tooltip: 'Reject',
+                                icon: _busyRejecting
+                                    ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                                    : const Icon(Icons.close,
+                                    color: Colors.red),
+                                onPressed: _busyRejecting
+                                    ? null
+                                    : () => _rejectRequest(senderId),
+                              ),
+                            ],
+                          ),
                         ),
                       );
                     },
@@ -103,15 +208,20 @@ class FriendView extends StatelessWidget {
               );
             },
           ),
+
           const Divider(height: 32),
-          const Text("My Friends", style: TextStyle(fontWeight: FontWeight.bold)),
+          const Text("My Friends",
+              style: TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
+
+          // Friends Section
           StreamBuilder<QuerySnapshot>(
             stream: userRef.collection('friends').snapshots(),
             builder: (context, snapshot) {
-              if (!snapshot.hasData) return const CircularProgressIndicator();
+              if (!snapshot.hasData) {
+                return const LinearProgressIndicator();
+              }
               final friends = snapshot.data!.docs;
-
               if (friends.isEmpty) {
                 return const Text("No friends added yet.");
               }
@@ -121,32 +231,65 @@ class FriendView extends StatelessWidget {
                 physics: const NeverScrollableScrollPhysics(),
                 itemCount: friends.length,
                 itemBuilder: (context, index) {
-                  final friend = friends[index].data() as Map<String, dynamic>;
-                  final name = friend['name'] ?? 'No name';
-                  final status = friend['status'] ?? 'offline';
-                  final photoUrl = friend['photoUrl'];
-                  final isOnline = status == 'online';
-                  final isCrash = status == 'alert';
+                  final friendRef = friends[index].reference;
 
-                  return ListTile(
-                    leading: CircleAvatar(
-                      backgroundImage: photoUrl != null ? NetworkImage(photoUrl) : null,
-                      child: photoUrl == null ? const Icon(Icons.person) : null,
-                    ),
-                    title: Text(name),
-                    trailing: Icon(
-                      isCrash
-                          ? Icons.warning_amber_rounded
-                          : isOnline
-                          ? Icons.circle
-                          : Icons.circle_outlined,
-                      color: isCrash
-                          ? Colors.red
-                          : isOnline
-                          ? Colors.green
-                          : Colors.grey,
-                      size: 16,
-                    ),
+                  return StreamBuilder<DocumentSnapshot>(
+                    stream: FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(friendRef.id)
+                        .snapshots(),
+                    builder: (context, snap) {
+                      if (!snap.hasData || !snap.data!.exists) {
+                        return const SizedBox.shrink();
+                      }
+
+                      final data = snap.data!.data() as Map<String, dynamic>? ?? {};
+                      final name = data['name'] ?? 'No name';
+                      final photoUrl = data['photoUrl'];
+                      final status = data['status'] ?? 'offline';
+                      final crashAt = (data['crashAt'] as Timestamp?)?.toDate();
+
+                      // compute effective status
+                      String effectiveStatus = status;
+                      if (status == 'alert' && crashAt != null) {
+                        final diff = DateTime.now().difference(crashAt);
+                        if (diff.inHours >= 2) {
+                          effectiveStatus = 'online';
+
+                          // 🔥 update Firestore so all friends see reset
+                          FirebaseFirestore.instance
+                              .collection('users')
+                              .doc(friendRef.id)
+                              .update({
+                            'status': 'online',
+                            'crashAt': null,
+                          });
+                        }
+                      }
+
+                      final isOnline = effectiveStatus == 'online';
+                      final isCrash = effectiveStatus == 'alert';
+
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundImage:
+                          (photoUrl is String && photoUrl.isNotEmpty) ? NetworkImage(photoUrl) : null,
+                          child: (photoUrl == null || (photoUrl is String && photoUrl.isEmpty))
+                              ? const Icon(Icons.person)
+                              : null,
+                        ),
+                        title: Text(name),
+                        trailing: Icon(
+                          isCrash
+                              ? Icons.warning_amber_rounded
+                              : isOnline
+                              ? Icons.circle
+                              : Icons.circle_outlined,
+                          color: isCrash ? Colors.red : isOnline ? Colors.green : Colors.grey,
+                          size: 16,
+                        ),
+                      );
+                    },
                   );
                 },
               );

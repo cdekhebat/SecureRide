@@ -10,8 +10,8 @@ import 'package:video_player/video_player.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
-import 'package:secureride/views/video_player_screen.dart';
-import 'package:secureride/views/video_preview_screen.dart';
+import 'package:secureride/utils/video_player_screen.dart';
+import 'package:secureride/utils/video_preview_screen.dart';
 import 'package:secureride/models/post.dart'; // ✅ Import Post model
 
 class ProfileView extends StatefulWidget {

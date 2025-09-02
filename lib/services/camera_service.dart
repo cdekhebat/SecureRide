@@ -1,4 +1,4 @@
-// ✅ CameraService.dart
+// 1. First, update camera_service.dart to handle both manual and crash recordings
 import 'dart:async';
 import 'dart:io';
 import 'package:camera/camera.dart';
@@ -73,24 +73,63 @@ class CameraService {
     return _lastLoopPath;
   }
 
+  // Existing manual save function (unchanged)
   Future<String?> saveManualRecording() async {
-    if (!isRecording || _lastLoopPath == null || !File(_lastLoopPath!).existsSync()) {
-      debugPrint("🔴 No valid loop recording to save manually.");
+    debugPrint("🟡 Attempting to save manual recording");
+    if (!isRecording) {
+      debugPrint("🔴 Not recording");
       return null;
     }
 
-    final dir = await getApplicationDocumentsDirectory();
-    final previewDir = Directory(path.join(dir.path, 'preview_videos'));
-    if (!await previewDir.exists()) await previewDir.create(recursive: true);
+    if (_lastLoopPath == null || !File(_lastLoopPath!).existsSync()) {
+      debugPrint("🔴 No valid _lastLoopPath or file does not exist: $_lastLoopPath");
+      return null;
+    }
 
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final previewPath = path.join(previewDir.path, 'manual_$timestamp.mp4');
-    final copied = await File(_lastLoopPath!).copy(previewPath);
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final previewDir = Directory(path.join(dir.path, 'preview_videos'));
+      if (!await previewDir.exists()) await previewDir.create(recursive: true);
 
-    final listFile = File(path.join(dir.path, 'video_list.txt'));
-    await listFile.writeAsString('${copied.path}\n', mode: FileMode.append, flush: true);
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final previewPath = path.join(previewDir.path, 'manual_$timestamp.mp4');
+      final copied = await File(_lastLoopPath!).copy(previewPath);
 
-    debugPrint("✅ Manual recording saved: ${copied.path}");
-    return copied.path;
+      debugPrint("✅ Copied video to: $previewPath");
+      return copied.path;
+    } catch (e) {
+      debugPrint("❌ Exception while saving manual recording: $e");
+      return null;
+    }
+  }
+
+  // NEW: Function to save crash videos
+  Future<String?> saveCrashRecording() async {
+    debugPrint("🟡 Attempting to save crash recording");
+    if (!isRecording) {
+      debugPrint("🔴 Not recording");
+      return null;
+    }
+
+    if (_lastLoopPath == null || !File(_lastLoopPath!).existsSync()) {
+      debugPrint("🔴 No valid _lastLoopPath or file does not exist: $_lastLoopPath");
+      return null;
+    }
+
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final crashDir = Directory(path.join(dir.path, 'crash_videos'));
+      if (!await crashDir.exists()) await crashDir.create(recursive: true);
+
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final crashPath = path.join(crashDir.path, 'crash_$timestamp.mp4');
+      final copied = await File(_lastLoopPath!).copy(crashPath);
+
+      debugPrint("✅ Saved crash video to: $crashPath");
+      return copied.path;
+    } catch (e) {
+      debugPrint("❌ Exception while saving crash recording: $e");
+      return null;
+    }
   }
 }

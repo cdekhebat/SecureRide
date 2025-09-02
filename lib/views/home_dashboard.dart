@@ -1,18 +1,18 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
-import 'package:flutter/foundation.dart'; // Added for debugPrint
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:syncfusion_flutter_gauges/gauges.dart';
+import 'package:path/path.dart' as p;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter_background/flutter_background.dart' as fb;
+
+import 'preview_view.dart';
 import '../services/camera_service.dart';
-import 'package:secureride/views/crash_video_list_view.dart';
+import 'crash_video_list_view.dart';
 
 class HomeDashboard extends StatefulWidget {
   const HomeDashboard({super.key});
@@ -22,215 +22,208 @@ class HomeDashboard extends StatefulWidget {
 }
 
 class _HomeDashboardState extends State<HomeDashboard> {
-  double currentSpeed = 0.0;
-  int crashCount = 0;
-  List<String> crashVideos = [];
-  List<double> speedHistory = [];
-  bool isTestingMode = false; // Set to true for testing
-  Timer? _speedTimer;
+  double _currentSpeed = 0.0;
+  int _crashCount = 0;
+  bool _isCameraReady = false;
   final CameraService _cameraService = CameraService();
-  final Random _random = Random();
-  bool _isCameraInitialized = false;
+  Timer? _speedTimer;
+  List<double> _speedHistory = [];
+
+  // Test mode variables
+  bool testingCrash = false;
+  Timer? testTimer;
+  bool crashSimulated = false;
 
   @override
   void initState() {
     super.initState();
-    _initializeCamera();
-    _loadCrashData();
+    _initializeServices();
+    _checkLocationPermission();
+  }
+
+  Future<void> _checkLocationPermission() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return;
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      await Geolocator.requestPermission();
+    }
+  }
+
+  Future<void> _initializeServices() async {
+    await _loadCrashCount();
+    await _cameraService.initializeCamera();
+    await _cameraService.startLoopRecording();
+    setState(() {
+      _isCameraReady = true;
+    });
     _startSpeedMonitoring();
-    _setupBackgroundService();
   }
 
-  Future<void> _setupBackgroundService() async {
-    try {
-      const androidConfig = fb.FlutterBackgroundAndroidConfig(
-        notificationTitle: "SecureRide Monitor",
-        notificationText: "Crash detection is active",
-        notificationIcon: fb.AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
-      );
-
-      final initialized = await fb.FlutterBackground.initialize(androidConfig: androidConfig);
-      if (initialized) {
-        await fb.FlutterBackground.enableBackgroundExecution();
-      }
-    } catch (e) {
-      debugPrint("Background service setup error: $e");
-    }
-  }
-
-  Future<void> _initializeCamera() async {
-    try {
-      await _cameraService.initializeCamera();
-      setState(() => _isCameraInitialized = true);
-
-      // Start recording automatically
-      if (!_cameraService.isRecording) {
-        await _cameraService.startLoopRecording();
-      }
-    } catch (e) {
-      debugPrint("Camera initialization failed: $e");
-    }
-  }
-
-  Future<void> _loadCrashData() async {
+  Future<void> _loadCrashCount() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      crashCount = prefs.getInt('crashCount') ?? 0;
-      crashVideos = prefs.getStringList('crashVideos') ?? [];
+      _crashCount = prefs.getInt('crashCount') ?? 0;
     });
   }
 
-  Future<void> _saveCrashData() async {
+  Future<void> _saveCrashCount() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('crashCount', crashCount);
-    await prefs.setStringList('crashVideos', crashVideos);
+    await prefs.setInt('crashCount', _crashCount);
   }
 
-  Future<void> _resetCrashData() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('crashCount');
-    await prefs.remove('crashVideos');
-
-    final dir = await getApplicationDocumentsDirectory();
-    final crashDir = Directory('${dir.path}/crash_videos');
-    if (await crashDir.exists()) {
-      for (var file in crashDir.listSync()) {
-        if (file is File) await file.delete();
-      }
+  void _startSpeedMonitoring() {
+    if (testingCrash) {
+      _startCrashTest();
+      return;
     }
 
-    setState(() {
-      crashCount = 0;
-      crashVideos = [];
-      speedHistory = [];
+    _speedTimer?.cancel();
+    _speedTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+      try {
+        final position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.bestForNavigation,
+        );
+
+        setState(() {
+          _currentSpeed = position.speed * 3.6;
+          _speedHistory.add(_currentSpeed);
+          if (_speedHistory.length > 10) _speedHistory.removeAt(0);
+        });
+
+        _checkForCrash();
+      } catch (e) {
+        debugPrint('Speed monitoring error: $e');
+      }
     });
   }
 
-  void _startSpeedMonitoring() async {
-    if (!isTestingMode) await Geolocator.requestPermission();
+  // -------------------
+  // Test Mode Simulation
+  // -------------------
+  void _startCrashTest() {
+    crashSimulated = false;
+    _speedHistory.clear();
 
-    int tick = 0;
-    _speedTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
-      tick++;
-
-      if (isTestingMode) {
-        // Simulate crash every 20 seconds (90 -> 0)
-        if (tick % 20 == 0) {
-          setState(() {
-            currentSpeed = 90;
-            speedHistory.add(currentSpeed);
-          });
-        } else if (tick % 20 == 1) {
-          setState(() {
-            currentSpeed = 0;
-            speedHistory.add(currentSpeed);
-          });
+    testTimer?.cancel();
+    testTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      setState(() {
+        if (!crashSimulated && timer.tick == 5) {
+          // 🚨 Force crash at 5s
+          _speedHistory.add(_currentSpeed);
+          _currentSpeed = 35; // drop speed
+          crashSimulated = true;
           _checkForCrash();
         } else {
-          // Random speed fluctuations
-          final fluctuations = [-10, -5, 0, 5, 10];
-          double fluctuation = fluctuations[_random.nextInt(fluctuations.length)].toDouble();
-          double newSpeed = (currentSpeed + fluctuation).clamp(0, 180);
-          setState(() {
-            currentSpeed = newSpeed;
-            speedHistory.add(currentSpeed);
-          });
+          _currentSpeed = Random().nextDouble() * 60 + 30; // 30–90
         }
 
-        if (speedHistory.length > 10) {
-          speedHistory.removeAt(0);
-        }
-      } else {
-        // Real speed monitoring
-        Geolocator.getPositionStream(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.best,
-            distanceFilter: 5,
-          ),
-        ).listen((Position position) {
-          double speedKmh = position.speed * 3.6;
-          setState(() {
-            currentSpeed = speedKmh;
-            speedHistory.add(currentSpeed);
-            if (speedHistory.length > 10) speedHistory.removeAt(0);
-          });
-          _checkForCrash();
-        });
-      }
+        _speedHistory.add(_currentSpeed);
+        if (_speedHistory.length > 3) _speedHistory.removeAt(0);
+      });
     });
+  }
+
+  void _stopCrashTest() {
+    testTimer?.cancel();
+    testTimer = null;
+    testingCrash = false;
   }
 
   void _checkForCrash() {
-    if (speedHistory.length >= 2) {
-      final prev = speedHistory[speedHistory.length - 2];
-      final curr = speedHistory.last;
+    if (_speedHistory.length < 2) return;
 
-      // Crash detection: significant drop from >=50 to <=40 within 1s
-      if (prev >= 50 && curr <= 40) {
-        debugPrint("⚠️ Crash Detected: $prev ➜ $curr");
-        _handleCrashDetected();
-      }
+    final double previousSpeed = _speedHistory[_speedHistory.length - 2];
+    final double currentSpeed = _speedHistory.last;
+
+    if ((previousSpeed - currentSpeed) >= 50) {
+      _handleCrashDetected();
     }
   }
 
   Future<void> _handleCrashDetected() async {
-    if (!_isCameraInitialized) {
-      debugPrint("Camera not initialized, skipping crash save");
-      return;
-    }
+    if (!_isCameraReady) return;
 
     try {
-      // Ensure camera service is recording
-      if (!_cameraService.isRecording) {
-        debugPrint("Starting loop recording for crash save");
-        await _cameraService.startLoopRecording();
-      }
-
-      // Stop recording to save the current video
       final videoPath = await _cameraService.stopLoopRecording();
-      if (videoPath == null || !File(videoPath).existsSync()) {
-        debugPrint("No video available for crash");
-        return;
-      }
+      if (videoPath == null) return;
 
-      final dir = await getApplicationDocumentsDirectory();
-      final crashDir = Directory('${dir.path}/crash_videos');
-      if (!await crashDir.exists()) await crashDir.create(recursive: true);
+      final appDir = await getApplicationDocumentsDirectory();
+      final crashDir = Directory(p.join(appDir.path, 'crash_videos'));
+      if (!await crashDir.exists()) await crashDir.create();
 
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final crashPath = path.join(crashDir.path, 'crash_$timestamp.mp4');
+      final crashPath = p.join(crashDir.path, 'crash_$timestamp.mp4');
       await File(videoPath).copy(crashPath);
 
       setState(() {
-        crashCount++;
-        crashVideos.add(crashPath);
+        _crashCount++;
       });
-
-      await _saveCrashData();
-      await _updateCrashStatus();
-
-      // Restart recording after saving crash video
+      await _saveCrashCount();
       await _cameraService.startLoopRecording();
 
-      debugPrint("✅ Crash video saved: $crashPath");
+      // 🚨 Update crash status in Firestore
+      await _setCrashStatus();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(testingCrash
+                ? '✅ Test crash detected! Video saved.'
+                : '🚨 Crash detected! Video saved.'),
+            backgroundColor: testingCrash ? Colors.green : Colors.red,
+          ),
+        );
+      }
     } catch (e) {
-      debugPrint("Crash save error: $e");
+      debugPrint('Crash handling error: $e');
     }
   }
 
-  Future<void> _updateCrashStatus() async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
+  /// 🚨 Update crash status for 2 hours
+  Future<void> _setCrashStatus() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
 
-    await FirebaseFirestore.instance.collection('users').doc(uid).update({
-      'status': 'crashed',
-      'lastCrash': DateTime.now(),
+    final userDoc =
+    FirebaseFirestore.instance.collection('users').doc(currentUser.uid);
+
+    // Mark status = alert with crashAt timestamp
+    await userDoc.update({
+      'status': 'alert',
+      'crashAt': FieldValue.serverTimestamp(),
+    });
+
+    // Reset to "online" after 2 hours (local timer safeguard)
+    Future.delayed(const Duration(hours: 2), () async {
+      final snap = await userDoc.get();
+      if (!snap.exists) return;
+
+      final data = snap.data() as Map<String, dynamic>;
+      final crashAt = (data['crashAt'] as Timestamp?)?.toDate();
+      if (crashAt != null) {
+        final diff = DateTime.now().difference(crashAt);
+        if (diff.inHours >= 2) {
+          await userDoc.update({'status': 'online'});
+        }
+      }
+    });
+  }
+
+  void _resetCrashCount() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('crashCount', 0);
+    setState(() {
+      _crashCount = 0;
     });
   }
 
   @override
   void dispose() {
     _speedTimer?.cancel();
+    testTimer?.cancel();
+    _cameraService.stopLoopRecording();
     super.dispose();
   }
 
@@ -241,8 +234,30 @@ class _HomeDashboardState extends State<HomeDashboard> {
         title: const Text('RIDE DASHBOARD'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _resetCrashData,
+            icon: Icon(
+              testingCrash ? Icons.stop : Icons.science,
+              color: testingCrash ? Colors.red : Colors.yellow,
+            ),
+            tooltip: testingCrash ? 'Stop Crash Test' : 'Start Crash Test',
+            onPressed: () {
+              setState(() {
+                testingCrash = !testingCrash;
+              });
+              if (testingCrash) {
+                _stopCrashTest();
+                _startCrashTest();
+              } else {
+                _stopCrashTest();
+                _startSpeedMonitoring();
+              }
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.video_library),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const PreviewView()),
+            ),
           ),
         ],
       ),
@@ -259,17 +274,18 @@ class _HomeDashboardState extends State<HomeDashboard> {
                     GaugeRange(startValue: 60, endValue: 120, color: Colors.orange),
                     GaugeRange(startValue: 120, endValue: 180, color: Colors.red),
                   ],
-                  pointers: [
-                    NeedlePointer(value: currentSpeed),
-                  ],
+                  pointers: [NeedlePointer(value: _currentSpeed)],
                   annotations: [
                     GaugeAnnotation(
-                      widget: Text(
-                        '${currentSpeed.toStringAsFixed(0)} km/h',
-                        style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                      ),
-                      angle: 90,
                       positionFactor: 0.8,
+                      angle: 90,
+                      widget: Text(
+                        '${_currentSpeed.toStringAsFixed(0)} km/h',
+                        style: const TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -278,39 +294,40 @@ class _HomeDashboardState extends State<HomeDashboard> {
           ),
           Container(
             padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(color: Colors.grey[200]),
+            decoration: BoxDecoration(
+              color: Colors.grey[200],
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+            ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
                 Column(
                   children: [
                     const Text('CRASHES DETECTED'),
-                    Text('$crashCount', style: const TextStyle(fontSize: 32, color: Colors.red)),
+                    Text(
+                      '$_crashCount',
+                      style: const TextStyle(
+                        fontSize: 32,
+                        color: Colors.red,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _resetCrashCount,
+                      child: const Text('Reset', style: TextStyle(fontSize: 12)),
+                    ),
                   ],
                 ),
-                ElevatedButton.icon(
-                  onPressed: crashVideos.isEmpty
-                      ? null
-                      : () => Navigator.push(
+                ElevatedButton(
+                  onPressed: () => Navigator.push(
                     context,
-                    MaterialPageRoute(
-                      builder: (_) => CrashVideoListView(videos: crashVideos),
-                    ),
+                    MaterialPageRoute(builder: (_) => const CrashVideoListView()),
                   ),
-                  icon: const Icon(Icons.video_library),
-                  label: const Text('VIEW CRASHES'),
+                  child: const Text('VIEW CRASH VIDEOS'),
                 ),
               ],
             ),
           ),
-          if (!_isCameraInitialized)
-            const Padding(
-              padding: EdgeInsets.all(8.0),
-              child: Text(
-                'Camera not initialized. Crash videos may not be saved.',
-                style: TextStyle(color: Colors.red),
-              ),
-            ),
         ],
       ),
     );
